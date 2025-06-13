@@ -21,7 +21,7 @@ This is an interactive sentiment analysis dashboard built with Python and Stream
 ### 1. Clone the repository (or download the source code)
 
 ```bash
-git clone https://github.com/yourusername/sentiment-dashboard.git
+https://github.com/MphoLorriey25/sentiment-dashboard.git
 cd sentiment-dashboard
 ````
 
