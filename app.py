@@ -1,96 +1,118 @@
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
-import torch
 import nltk
+import torch
+import base64
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
 from nltk.corpus import stopwords
 from sklearn.feature_extraction.text import TfidfVectorizer
-import os
+from fpdf import FPDF
+import io
+import tempfile
+import json
 
-# Download NLTK stopwords if not already
+# Download stopwords
 nltk.download('stopwords')
 stop_words = set(stopwords.words('english'))
 
-# Load model and tokenizer
-model_name = "cardiffnlp/twitter-roberta-base-sentiment-latest"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForSequenceClassification.from_pretrained(model_name)
-classifier = pipeline("sentiment-analysis", model=model, tokenizer=tokenizer)
+# Load sentiment model
+MODEL_NAME = "cardiffnlp/twitter-roberta-base-sentiment-latest"
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
+sentiment_pipeline = pipeline("sentiment-analysis", model=model, tokenizer=tokenizer)
 
-# Title
-st.title("💬 Sentiment Analysis Dashboard")
+st.set_page_config(page_title="Sentiment Analysis Dashboard", layout="wide")
+st.title("📊 Sentiment Analysis Dashboard")
 
-# Select input type
-input_type = st.radio("Choose input type:", ["Single Text", "Multiple Texts", "Upload File"])
+st.markdown("""
+This app analyzes sentiment from text (positive, neutral, negative), shows confidence scores, highlights keywords,
+and allows you to upload, type, or paste text.
+""")
 
-# Get input
+input_mode = st.radio("Choose Input Method:", ("Single Text", "Multiple Texts", "Upload CSV"))
+
 texts = []
-
-if input_type == "Single Text":
-    user_input = st.text_area("Enter a sentence:")
-    if user_input:
-        texts = [user_input]
-
-elif input_type == "Multiple Texts":
-    user_input = st.text_area("Enter multiple sentences (one per line):")
-    if user_input:
-        texts = user_input.strip().split('\n')
-
-elif input_type == "Upload File":
-    uploaded_file = st.file_uploader("Upload a .txt file", type="txt")
+if input_mode == "Single Text":
+    text_input = st.text_area("Enter your text here")
+    if text_input:
+        texts = [text_input]
+elif input_mode == "Multiple Texts":
+    multi_input = st.text_area("Enter multiple texts (one per line)")
+    if multi_input:
+        texts = [line.strip() for line in multi_input.split('\n') if line.strip()]
+else:
+    uploaded_file = st.file_uploader("Upload CSV file with a 'text' column", type="csv")
     if uploaded_file:
-        content = uploaded_file.read().decode("utf-8")
-        texts = content.strip().splitlines()
+        df = pd.read_csv(uploaded_file)
+        if 'text' in df.columns:
+            texts = df['text'].dropna().astype(str).tolist()
+        else:
+            st.error("CSV must contain a 'text' column")
 
-# Analyze
-if texts and st.button("Analyze Sentiment"):
-    results = []
-    all_labels = []
-    for text in texts:
-        if text.strip() == "":
-            continue
-        result = classifier(text)[0]
-        label = result["label"].lower()
-        score = round(result["score"], 4)
+if texts:
+    with st.spinner("Analyzing..."):
+        results = []
+        for text in texts:
+            try:
+                sentiment = sentiment_pipeline(text)[0]
+                label = sentiment['label'].capitalize()
+                score = round(sentiment['score'], 4)
 
-        # Convert Hugging Face label to "neutral" if confidence is low
-        if label in ["positive", "negative"] and score < 0.6:
-            label = "neutral"
+                # Adjust to 3-class manually
+                if score < 0.5:
+                    label = "Neutral"
 
-        results.append({
-            "Text": text,
-            "Sentiment": label.capitalize(),
-            "Confidence": score
-        })
-        all_labels.append(label)
+                # Extract keywords
+                words = [word for word in text.split() if word.lower() not in stop_words]
+                vectorizer = TfidfVectorizer(stop_words='english', max_features=5)
+                tfidf_matrix = vectorizer.fit_transform([text])
+                keywords = vectorizer.get_feature_names_out()
 
-    df = pd.DataFrame(results)
+                results.append({
+                    "Text": text,
+                    "Sentiment": label,
+                    "Confidence": score,
+                    "Keywords": ", ".join(keywords)
+                })
+            except Exception as e:
+                results.append({
+                    "Text": text,
+                    "Sentiment": "Error",
+                    "Confidence": 0.0,
+                    "Keywords": str(e)
+                })
 
-    # Show table
-    st.subheader("🔍 Sentiment Results")
-    st.dataframe(df, use_container_width=True)
+        results_df = pd.DataFrame(results)
+        st.subheader("Sentiment Results")
+        st.dataframe(results_df, use_container_width=True)
 
-    # Show chart
-    st.subheader("📊 Sentiment Distribution")
-    sentiment_counts = df['Sentiment'].value_counts()
-    fig, ax = plt.subplots()
-    sentiment_counts.plot.pie(autopct="%1.1f%%", startangle=90, ax=ax)
-    ax.set_ylabel("")
-    ax.set_title("Sentiment Share")
-    st.pyplot(fig)
+        # Visualization
+        sentiment_counts = results_df['Sentiment'].value_counts()
+        fig, ax = plt.subplots()
+        ax.bar(sentiment_counts.index, sentiment_counts.values, color=["green", "gray", "red"])
+        ax.set_title("Sentiment Distribution")
+        ax.set_ylabel("Number of Texts")
+        st.pyplot(fig)
 
-    # Keyword Extraction
-    st.subheader("🗝️ Top Keywords (TF-IDF)")
-    vectorizer = TfidfVectorizer(stop_words='english', max_features=10)
-    X = vectorizer.fit_transform(df["Text"])
-    keywords = vectorizer.get_feature_names_out()
-    st.write(", ".join(keywords))
+        # Export options
+        st.subheader("Export Results")
+        csv_data = results_df.to_csv(index=False).encode('utf-8')
+        st.download_button("Download CSV", csv_data, file_name="sentiment_results.csv", mime="text/csv")
 
-    # Export Options
-    st.subheader("📁 Export Results")
-    csv = df.to_csv(index=False).encode("utf-8")
-    st.download_button("Download CSV", csv, "sentiment_results.csv", "text/csv")
+        # JSON Export
+        json_data = results_df.to_json(orient="records", lines=True).encode("utf-8")
+        st.download_button("Download JSON", json_data, file_name="sentiment_results.json", mime="application/json")
 
-    json = df.to_json(orient="records", force_ascii=False)
-    st.download_button("Download JSON", json, "sentiment_results.json", "application/json")
+        # PDF Export
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", size=12)
+        pdf.cell(200, 10, txt="Sentiment Analysis Report", ln=True, align='C')
+        for idx, row in results_df.iterrows():
+            pdf.multi_cell(0, 10, txt=f"Text: {row['Text']}\nSentiment: {row['Sentiment']}\nConfidence: {row['Confidence']}\nKeywords: {row['Keywords']}\n---")
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
+            pdf.output(tmp_pdf.name)
+            with open(tmp_pdf.name, "rb") as f:
+                st.download_button("Download PDF", f.read(), file_name="sentiment_report.pdf", mime="application/pdf")
