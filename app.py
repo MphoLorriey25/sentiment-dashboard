@@ -1,89 +1,96 @@
 import streamlit as st
 import pandas as pd
+import matplotlib.pyplot as plt
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
-from sklearn.feature_extraction.text import TfidfVectorizer
 import torch
+import nltk
+from nltk.corpus import stopwords
+from sklearn.feature_extraction.text import TfidfVectorizer
+import os
+
+# Download NLTK stopwords if not already
+nltk.download('stopwords')
+stop_words = set(stopwords.words('english'))
 
 # Load model and tokenizer
-MODEL_NAME = "cardiffnlp/twitter-roberta-base-sentiment-latest"
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
-sentiment_pipeline = pipeline("sentiment-analysis", model=model, tokenizer=tokenizer)
+model_name = "cardiffnlp/twitter-roberta-base-sentiment-latest"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForSequenceClassification.from_pretrained(model_name)
+classifier = pipeline("sentiment-analysis", model=model, tokenizer=tokenizer)
 
-# Function to get sentiment and confidence
-def analyze_sentiment(texts):
-    results = sentiment_pipeline(texts, truncation=True)
-    sentiments, scores = [], []
-    for r in results:
-        sentiments.append(r['label'].lower())
-        scores.append(round(r['score'], 3))
-    return sentiments, scores
+# Title
+st.title("💬 Sentiment Analysis Dashboard")
 
-# Function to extract keywords using TF-IDF
-def extract_keywords(texts, top_n=3):
-    try:
-        vectorizer = TfidfVectorizer(stop_words='english')
-        X = vectorizer.fit_transform(texts)
-        feature_names = vectorizer.get_feature_names_out()
-        keywords = []
-        for row in X:
-            scores = row.toarray().flatten()
-            top_indices = scores.argsort()[-top_n:][::-1]
-            top_keywords = [feature_names[i] for i in top_indices if scores[i] > 0]
-            keywords.append(", ".join(top_keywords))
-        return keywords
-    except Exception as e:
-        return [""] * len(texts)
+# Select input type
+input_type = st.radio("Choose input type:", ["Single Text", "Multiple Texts", "Upload File"])
 
-# Streamlit UI
-st.title("🧠 Sentiment Analysis Dashboard")
-st.markdown("Upload one or two `.txt` files. Each line will be treated as a separate text entry.")
+# Get input
+texts = []
 
-# File uploads
-file1 = st.file_uploader("Upload File A (.txt)", type=["txt"])
-file2 = st.file_uploader("Upload File B (.txt) - Optional", type=["txt"])
+if input_type == "Single Text":
+    user_input = st.text_area("Enter a sentence:")
+    if user_input:
+        texts = [user_input]
 
-def process_file(uploaded_file):
-    raw_text = uploaded_file.read().decode("utf-8").splitlines()
-    raw_text = [line.strip() for line in raw_text if line.strip()]
-    sentiments, scores = analyze_sentiment(raw_text)
-    keywords = extract_keywords(raw_text)
-    df = pd.DataFrame({
-        "text": raw_text,
-        "sentiment": sentiments,
-        "confidence": scores,
-        "keywords": keywords
-    })
-    return df
+elif input_type == "Multiple Texts":
+    user_input = st.text_area("Enter multiple sentences (one per line):")
+    if user_input:
+        texts = user_input.strip().split('\n')
 
-# Process and display files
-if file1:
-    st.subheader("📂 File A Results")
-    df1 = process_file(file1)
-    st.dataframe(df1)
+elif input_type == "Upload File":
+    uploaded_file = st.file_uploader("Upload a .txt file", type="txt")
+    if uploaded_file:
+        content = uploaded_file.read().decode("utf-8")
+        texts = content.strip().splitlines()
 
-if file2:
-    st.subheader("📂 File B Results")
-    df2 = process_file(file2)
-    st.dataframe(df2)
+# Analyze
+if texts and st.button("Analyze Sentiment"):
+    results = []
+    all_labels = []
+    for text in texts:
+        if text.strip() == "":
+            continue
+        result = classifier(text)[0]
+        label = result["label"].lower()
+        score = round(result["score"], 4)
 
-    # Comparative Sentiment Distribution
-    st.subheader("📊 Comparative Sentiment Distribution")
-    sentiment_counts = pd.DataFrame({
-        "File A": df1["sentiment"].value_counts(),
-        "File B": df2["sentiment"].value_counts()
-    }).fillna(0)
-    st.bar_chart(sentiment_counts)
+        # Convert Hugging Face label to "neutral" if confidence is low
+        if label in ["positive", "negative"] and score < 0.6:
+            label = "neutral"
 
-# Export options
-if file1:
+        results.append({
+            "Text": text,
+            "Sentiment": label.capitalize(),
+            "Confidence": score
+        })
+        all_labels.append(label)
+
+    df = pd.DataFrame(results)
+
+    # Show table
+    st.subheader("🔍 Sentiment Results")
+    st.dataframe(df, use_container_width=True)
+
+    # Show chart
+    st.subheader("📊 Sentiment Distribution")
+    sentiment_counts = df['Sentiment'].value_counts()
+    fig, ax = plt.subplots()
+    sentiment_counts.plot.pie(autopct="%1.1f%%", startangle=90, ax=ax)
+    ax.set_ylabel("")
+    ax.set_title("Sentiment Share")
+    st.pyplot(fig)
+
+    # Keyword Extraction
+    st.subheader("🗝️ Top Keywords (TF-IDF)")
+    vectorizer = TfidfVectorizer(stop_words='english', max_features=10)
+    X = vectorizer.fit_transform(df["Text"])
+    keywords = vectorizer.get_feature_names_out()
+    st.write(", ".join(keywords))
+
+    # Export Options
     st.subheader("📁 Export Results")
-    file_format = st.selectbox("Choose format", ["CSV", "JSON"])
-    if file_format == "CSV":
-        st.download_button("Download File A Results", df1.to_csv(index=False), file_name="fileA_sentiments.csv", mime="text/csv")
-        if file2:
-            st.download_button("Download File B Results", df2.to_csv(index=False), file_name="fileB_sentiments.csv", mime="text/csv")
-    elif file_format == "JSON":
-        st.download_button("Download File A Results", df1.to_json(orient="records"), file_name="fileA_sentiments.json", mime="application/json")
-        if file2:
-            st.download_button("Download File B Results", df2.to_json(orient="records"), file_name="fileB_sentiments.json", mime="application/json")
+    csv = df.to_csv(index=False).encode("utf-8")
+    st.download_button("Download CSV", csv, "sentiment_results.csv", "text/csv")
+
+    json = df.to_json(orient="records", force_ascii=False)
+    st.download_button("Download JSON", json, "sentiment_results.json", "application/json")
