@@ -4,7 +4,7 @@
 This is an interactive sentiment analysis dashboard built with Python and Streamlit. It allows users to analyze text sentiment (positive, neutral, negative) with confidence scores, keyword extraction, batch processing, visualizations, and export results as CSV, JSON, or PDF.
 
 ## 📊 Sentiment Analysis Dashboard
-👉 Click here to open the app
+https://sentiment-dashboard-jmzufaa88feuna8v6ujtx4.streamlit.app/ 
 
 
 ## Features
