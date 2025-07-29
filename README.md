@@ -43,6 +43,11 @@ https://sentiment-dashboard-jmzufaa88feuna8v6ujtx4.streamlit.app/
 * PDF export includes sentiment summary and keywords.
 * Large batch sizes may be limited by API or hardware.
 
+## Contact Details
+📧 [lorrieym@gmail.com](mailto:lorrieym@gmail.com)  
+📞 [076 355 3963](tel:+27763553963)
+
+
 ---
 
 ## License
